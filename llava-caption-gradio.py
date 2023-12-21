@@ -4,6 +4,7 @@ import uuid
 import os
 import requests
 from PIL import Image
+from PIL import ImageOps
 from io import BytesIO
 from urllib.parse import urlparse
 from pathlib import Path
@@ -43,12 +44,22 @@ def get_extension_from_url(url):
     path = Path(parsed_url.path)
     return path.suffix
 
+def remove_transparency(image):
+    if image.mode in ('RGBA', 'LA') or (image.mode == 'P' and 'transparency' in image.info):
+        alpha = image.convert('RGBA').split()[-1]
+        bg = Image.new("RGB", image.size, (255, 255, 255))
+        bg.paste(image, mask=alpha)
+        return bg
+    else:
+        return image
+
 def load_image(image_file):
     if image_file.startswith("http://") or image_file.startswith("https://"):
         response = requests.get(image_file)
         image = Image.open(BytesIO(response.content)).convert("RGB")
     else:
         image = Image.open(image_file).convert("RGB")
+    image = remove_transparency(image)
     return image
 
 def process_image(image):
@@ -63,6 +74,16 @@ def create_prompt(prompt: str):
     conv.append_message(roles[0], prompt)
     conv.append_message(roles[1], None)
     return conv.get_prompt(), conv
+
+def remove_duplicates(string):
+    words = string.split()
+    unique_words = []
+
+    for word in words:
+        if word not in unique_words:
+            unique_words.append(word)
+
+    return ' '.join(unique_words)
 
 def ask_image(image: Image, prompt: str):
     image_tensor = process_image(image)
@@ -91,7 +112,31 @@ def ask_image(image: Image, prompt: str):
             use_cache=True,
             stopping_criteria=[stopping_criteria],
         )
-    return tokenizer.decode(output_ids[0, input_ids.shape[1] :], skip_special_tokens=True).strip()
+    generated_caption = tokenizer.decode(output_ids[0, input_ids.shape[1] :], skip_special_tokens=True).strip()
+
+    # Remove unnecessary phrases from the generated caption
+    unnecessary_phrases = ["The image features", "The image shows", "The image is", "looking directly at the camera", "in the image", "taking a selfie", "posing for a picture", "holding a cellphone", "is wearing a pair of sunglasses", "pulled back in a ponytail", "with a large window in the cent", "and there are no other people or objects in the scene..", " and.", "..", " is."]
+    for phrase in unnecessary_phrases:
+        generated_caption = generated_caption.replace(phrase, "")
+    
+    # Split the caption into sentences
+    sentences = generated_caption.split('. ')
+
+    # Check if the last sentence is a fragment and remove it if necessary
+    min_sentence_length = 3
+    if len(sentences) > 1:
+        last_sentence = sentences[-1]
+        if len(last_sentence.split()) <= min_sentence_length:
+            sentences = sentences[:-1]
+
+    # Keep only the first two sentences and append periods
+    sentences = [s.strip() + '.' for s in sentences[:3]]
+
+    generated_caption = ' '.join(sentences)
+
+    generated_caption = remove_duplicates(generated_caption)  # Remove duplicate words
+
+    return generated_caption
 
 def find_image_urls(data, url_pattern=re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+\.(?:jpg|jpeg|png|webp)')):
     """
