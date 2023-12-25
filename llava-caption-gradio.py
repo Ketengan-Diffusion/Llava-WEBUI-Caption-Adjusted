@@ -107,18 +107,34 @@ def ask_image(image: Image, prompt: str):
             input_ids,
             images=image_tensor,
             do_sample=True,
-            temperature=0.01,
-            max_new_tokens=512,
+            temperature=0.2,
+            max_new_tokens=2048,
             use_cache=True,
             stopping_criteria=[stopping_criteria],
         )
     generated_caption = tokenizer.decode(output_ids[0, input_ids.shape[1] :], skip_special_tokens=True).strip()
 
     # Remove unnecessary phrases from the generated caption
-    unnecessary_phrases = ["The image features", "The image shows", "The image is", "looking directly at the camera", "in the image", "taking a selfie", "posing for a picture", "holding a cellphone", "is wearing a pair of sunglasses", "pulled back in a ponytail", "with a large window in the cent", "and there are no other people or objects in the scene..", " and.", "..", " is."]
+    unnecessary_phrases = [
+        "The person is a",
+        "The image is",
+        "looking directly at the camera",
+        "in the image",
+        "taking a selfie",
+        "posing for a picture",
+        "holding a cellphone",
+        "is wearing a pair of sunglasses",
+        "pulled back in a ponytail",
+        "with a large window in the cent",
+        "and there are no other people or objects in the scene.",
+        " and.",
+        "..",
+        " is.",
+    ]
+
     for phrase in unnecessary_phrases:
         generated_caption = generated_caption.replace(phrase, "")
-    
+
     # Split the caption into sentences
     sentences = generated_caption.split('. ')
 
@@ -129,10 +145,53 @@ def ask_image(image: Image, prompt: str):
         if len(last_sentence.split()) <= min_sentence_length:
             sentences = sentences[:-1]
 
-    # Keep only the first two sentences and append periods
+    # Keep only the first three sentences and append periods
     sentences = [s.strip() + '.' for s in sentences[:3]]
 
     generated_caption = ' '.join(sentences)
+
+    generated_caption = remove_duplicates(generated_caption)  # Remove duplicate words
+
+    return generated_caption
+
+
+def fix_generated_caption(generated_caption):
+    # Remove unnecessary phrases from the generated caption
+    unnecessary_phrases = [
+        "The person is",
+        "The image is",
+        "looking directly at the camera",
+        "in the image",
+        "taking a selfie",
+        "posing for a picture",
+        "holding a cellphone",
+        "is wearing a pair of sunglasses",
+        "pulled back in a ponytail",
+        "with a large window in the cent",
+        "and there are no other people or objects in the scene.",
+        " and.",
+        "..",
+        " is.",
+    ]
+
+    for phrase in unnecessary_phrases:
+        generated_caption = generated_caption.replace(phrase, "")
+
+    # Split the caption into sentences
+    sentences = generated_caption.split('. ')
+
+    # Check if the last sentence is a fragment and remove it if necessary
+    min_sentence_length = 3
+    if len(sentences) > 1:
+        last_sentence = sentences[-1]
+        if len(last_sentence.split()) <= min_sentence_length:
+            sentences = sentences[:-1]
+
+    # Capitalize the first letter of the caption and add "a" at the beginning
+    sentences[0] = sentences[0].strip().capitalize()
+    sentences[0] = "a " + sentences[0] if not sentences[0].startswith("A ") else sentences[0]
+
+    generated_caption = '. '.join(sentences)
 
     generated_caption = remove_duplicates(generated_caption)  # Remove duplicate words
 
@@ -179,7 +238,7 @@ def gradio_interface(directory_path, prompt, exist):
     # Process each image path with tqdm progress tracker
     for im_path in tqdm(image_paths, desc="Captioning Images", unit="image"):
         base_name = os.path.splitext(os.path.basename(im_path))[0]
-        caption_path = os.path.join(directory_path, base_name + '.txt')
+        caption_path = os.path.join(directory_path, base_name + '.caption')
 
         # Handling existing files
         if os.path.exists(caption_path) and exist == 'skip':
@@ -195,13 +254,16 @@ def gradio_interface(directory_path, prompt, exist):
             im = load_image(im_path)
             result = ask_image(im, prompt)
 
+            # Fix the generated caption
+            fixed_result = fix_generated_caption(result)
+
             # Writing to a text file
             with open(caption_path, mode) as file:
                 if mode == 'a':
                     file.write("\n")
-                file.write(result)
+                file.write(fixed_result)  # Write the fixed caption
 
-            captions.append((base_name, result))
+            captions.append((base_name, fixed_result))
         except Exception as e:
             captions.append((base_name, f"Error processing {im_path}: {e}"))
 
@@ -211,7 +273,7 @@ iface = gr.Interface(
     fn=gradio_interface,
     inputs=[
         Textbox(label="Directory Path"),
-        Textbox(default="describe this image in detail", label="Captioning Prompt"),
+        Textbox(default="Describe the persons, The person is appearance like eyes color, hair color, skin color, and the clothes, object position the scene and the situation. Please describe it detailed. Don't explain the artstyle of the image", label="Captioning Prompt"),
         Radio(["skip", "replace", "add"], label="Existing Caption Action", default="skip")
     ],
     outputs=[
